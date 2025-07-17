@@ -14,7 +14,7 @@ import sys
 
 sys.path.append("../../")
 from utils.metrics import rouge
-from hgsum.model.dataloading import concatenate_documents, tokenize_tgs
+from model.dataloading import concatenate_documents, tokenize_tgs
 
 
 def prepare_graph(concatenated_text, glove_wv, online=True, for_summary=False):
