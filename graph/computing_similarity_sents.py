@@ -5,13 +5,14 @@ import jsonlines
 import time
 
 
+
 def get_embeddings(samples, sbert, dataset_name, token_type):
     sents_stripped_all_source = []
     for sample in samples:
         sents_stripped_all_source.extend(sample["heterograph_source"]["sents_tripped"])
     print("sents_stripped_all_source", len(sents_stripped_all_source))
     # Start the multi-process pool on all available CUDA devices
-    pool = sbert.start_multi_process_pool(target_devices=["cuda:0", "cuda:1", "cuda:2", "cuda:3"])
+    pool = sbert.start_multi_process_pool(target_devices=[f"cuda:{i}" for i in range(torch.cuda.device_count())])
     # Compute the embeddings using the multi-process pool
     sents_stripped_embeddings_source = sbert.encode_multi_process(sents_stripped_all_source, pool=pool, batch_size=64)
     sbert.stop_multi_process_pool(pool)
@@ -22,7 +23,7 @@ def get_embeddings(samples, sbert, dataset_name, token_type):
         sents_stripped_all_tgt.extend(sample["heterograph_tgt"]["sents_tripped"])
     print("sents_stripped_all_tgt", len(sents_stripped_all_tgt))
     # Start the multi-process pool on all available CUDA devices
-    pool = sbert.start_multi_process_pool(target_devices=["cuda:0", "cuda:1", "cuda:2", "cuda:3"])
+    pool = sbert.start_multi_process_pool(target_devices=[f"cuda:{i}" for i in range(torch.cuda.device_count())])
     # Compute the embeddings using the multi-process pool
     sents_stripped_embeddings_tgt = sbert.encode_multi_process(sents_stripped_all_tgt, pool=pool, batch_size=64)
     sbert.stop_multi_process_pool(pool)
