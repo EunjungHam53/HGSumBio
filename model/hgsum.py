@@ -63,6 +63,8 @@ class HGSummarizer(pl.LightningModule):
         self.tokenizer.add_tokens(["<sent-sep>"])
         self.model.resize_token_embeddings(len(self.tokenizer))
         self.sentsep_token_id = self.tokenizer.convert_tokens_to_ids("<sent-sep>")
+        self.validation_outputs = []
+        self.test_outputs = []  
 
     def forward(self, input_ids_source, output_ids, input_ids_summary, heterograph_source, words_positions_source,
                 sents_positions_source,
@@ -296,6 +298,46 @@ class HGSummarizer(pl.LightningModule):
             )
         return result_batch
 
+    # def validation_step(self, batch, batch_idx):
+    #     for p in self.model.parameters():
+    #         p.requires_grad = False
+    #     input_ids_source, output_ids, input_ids_summary, heterograph_source, words_positions_source, sents_positions_source, docs_positions_source, heterograph_tgt, words_positions_tgt, sents_positions_tgt, tgt = batch
+    #     loss = self.shared_step(input_ids_source, output_ids, input_ids_summary, heterograph_source,
+    #                             words_positions_source,
+    #                             sents_positions_source, docs_positions_source, heterograph_tgt, words_positions_tgt,
+    #                             sents_positions_tgt)
+    #     # print("validation step", input_ids_source.size())
+    #     if self.args.compute_rouge:
+    #         result_batch = self.compute_rouge_batch(input_ids_source, tgt, heterograph_source, words_positions_source,
+    #                                                 sents_positions_source, docs_positions_source, batch_idx)
+    #         return {"vloss": loss, "rouge_result": result_batch}
+    #     else:
+    #         return {"vloss": loss}
+
+    # def validation_epoch_end(self, outputs):
+    #     for p in self.model.parameters():
+    #         p.requires_grad = True
+
+    #     vloss = torch.stack([x["vloss"] for x in outputs]).mean()
+    #     self.log("vloss", vloss, sync_dist=True if self.use_ddp else False)
+    #     if self.args.compute_rouge:
+    #         names, metrics, avgf = self.compute_rouge_all(outputs, output_file="valid")
+    #         metrics = [vloss] + metrics
+    #         names = ["vloss"] + names
+    #         logs = dict(zip(*[names, metrics]))
+    #         self.logger.log_metrics(logs, step=self.global_step)
+    #         self.log("avgf", avgf)
+    #         return {
+    #             "avg_val_loss": vloss,
+    #             "avgf": avgf,
+    #             "log": logs,
+    #             "progress_bar": logs,
+    #         }
+    #     else:
+    #         logs = {"vloss": vloss}
+    #         self.logger.log_metrics(logs, step=self.global_step)
+    #         return {"vloss": vloss, "log": logs, "progress_bar": logs}
+
     def validation_step(self, batch, batch_idx):
         for p in self.model.parameters():
             p.requires_grad = False
@@ -304,13 +346,41 @@ class HGSummarizer(pl.LightningModule):
                                 words_positions_source,
                                 sents_positions_source, docs_positions_source, heterograph_tgt, words_positions_tgt,
                                 sents_positions_tgt)
-        # print("validation step", input_ids_source.size())
+        
         if self.args.compute_rouge:
             result_batch = self.compute_rouge_batch(input_ids_source, tgt, heterograph_source, words_positions_source,
                                                     sents_positions_source, docs_positions_source, batch_idx)
-            return {"vloss": loss, "rouge_result": result_batch}
+            output = {"vloss": loss, "rouge_result": result_batch}
         else:
-            return {"vloss": loss}
+            output = {"vloss": loss}
+        
+        # Lưu output vào instance attribute
+        self.validation_outputs.append(output)
+        return output
+
+    def on_validation_epoch_end(self):
+        for p in self.model.parameters():
+            p.requires_grad = True
+
+        if not self.validation_outputs:
+            return
+
+        vloss = torch.stack([x["vloss"] for x in self.validation_outputs]).mean()
+        self.log("vloss", vloss, sync_dist=True if self.use_ddp else False)
+        
+        if self.args.compute_rouge:
+            names, metrics, avgf = self.compute_rouge_all(self.validation_outputs, output_file="valid")
+            metrics = [vloss] + metrics
+            names = ["vloss"] + names
+            logs = dict(zip(*[names, metrics]))
+            self.logger.log_metrics(logs, step=self.global_step)
+            self.log("avgf", avgf)
+        else:
+            logs = {"vloss": vloss}
+            self.logger.log_metrics(logs, step=self.global_step)
+        
+        # Xóa outputs sau mỗi epoch
+        self.validation_outputs.clear()
 
     def compute_rouge_all(self, outputs, output_file=None):
         rouge_result_all = [r for b in outputs for r in b["rouge_result"]]
@@ -355,36 +425,18 @@ class HGSummarizer(pl.LightningModule):
         )
         return names, metrics, avgf
 
-    def validation_epoch_end(self, outputs):
-        for p in self.model.parameters():
-            p.requires_grad = True
-
-        vloss = torch.stack([x["vloss"] for x in outputs]).mean()
-        self.log("vloss", vloss, sync_dist=True if self.use_ddp else False)
-        if self.args.compute_rouge:
-            names, metrics, avgf = self.compute_rouge_all(outputs, output_file="valid")
-            metrics = [vloss] + metrics
-            names = ["vloss"] + names
-            logs = dict(zip(*[names, metrics]))
-            self.logger.log_metrics(logs, step=self.global_step)
-            self.log("avgf", avgf)
-            return {
-                "avg_val_loss": vloss,
-                "avgf": avgf,
-                "log": logs,
-                "progress_bar": logs,
-            }
-        else:
-            logs = {"vloss": vloss}
-            self.logger.log_metrics(logs, step=self.global_step)
-            return {"vloss": vloss, "log": logs, "progress_bar": logs}
-
     def test_step(self, batch, batch_idx):
-        return self.validation_step(batch, batch_idx)
+        output = self.validation_step(batch, batch_idx)
+        self.test_outputs.append(output)
+        return output
 
-    def test_epoch_end(self, outputs):
-        tloss = torch.stack([x["vloss"] for x in outputs]).mean()
+    def on_test_epoch_end(self):
+        if not self.test_outputs:
+            return
+            
+        tloss = torch.stack([x["vloss"] for x in self.test_outputs]).mean()
         self.log("tloss", tloss, sync_dist=True if self.use_ddp else False)
+        
         output_file = "test_%s_%d_%d_beam=%d_lenPen=%.2f" % (
             self.args.dataset_name,
             self.args.max_length_input,
@@ -398,14 +450,16 @@ class HGSummarizer(pl.LightningModule):
             if self.args.fewshot
             else output_file
         )
-        names, metrics, avgf = self.compute_rouge_all(outputs, output_file=output_file)
+        
+        names, metrics, avgf = self.compute_rouge_all(self.test_outputs, output_file=output_file)
         metrics = [tloss, avgf] + metrics
         names = ["tloss", "avgf"] + names
         logs = dict(zip(*[names, metrics]))
         self.logger.log_metrics(logs, step=self.global_step)
         self.log("avgf", avgf)
-        # self.log_dict(logs)
-        return {"avg_test_loss": tloss, "avgf": avgf, "log": logs, "progress_bar": logs}
+        
+        # Xóa outputs sau khi test
+        self.test_outputs.clear()
 
 
 def train(args):
