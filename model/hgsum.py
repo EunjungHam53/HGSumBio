@@ -440,7 +440,7 @@ def train(args):
         strategy=args.speed_strategy,
         # track_grad_norm=-1,
         max_steps=args.total_steps * args.accum_batch,
-        replace_sampler_ddp=False,
+        # replace_sampler_ddp=False,
         accumulate_grad_batches=args.accum_batch,
         # val_check_interval=0.5,
         check_val_every_n_epoch=1 if args.num_train_data > 100 else 5,
@@ -473,7 +473,7 @@ def test(args):
         accelerator=args.accelerator,
         # track_grad_norm=-1,
         max_steps=args.total_steps * args.accum_batch,
-        replace_sampler_ddp=False,
+        # replace_sampler_ddp=False,
         log_every_n_steps=5,
         precision=32,
         limit_test_batches=args.limit_test_batches if args.limit_test_batches else 1.0
