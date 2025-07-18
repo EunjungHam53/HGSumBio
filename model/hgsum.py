@@ -155,6 +155,21 @@ class HGSummarizer(pl.LightningModule):
     def shared_step(self, input_ids_source, output_ids, input_ids_summary, heterograph_source, words_positions_source,
                     sents_positions_source,
                     docs_positions_source, heterograph_tgt, words_positions_tgt, sents_positions_tgt):
+        
+        # Debug shapes
+        print(f"input_ids_source shape: {input_ids_source.shape}")
+        print(f"output_ids shape: {output_ids.shape}")
+        print(f"output_ids min/max: {output_ids.min()}/{output_ids.max()}")
+        
+        # Kiểm tra có giá trị âm không
+        if (output_ids < 0).any():
+            print("Warning: Negative values in output_ids")
+
+        # Kiểm tra heterograph có valid không
+        if heterograph_source is not None:
+            print(f"Heterograph nodes: {heterograph_source.num_nodes}")
+            print(f"Heterograph edges: {heterograph_source.num_edges}")
+
         lm_logits, mgat_outputs_source, sagpooling_ouputs, mgat_outputs_summary = self.forward(input_ids_source,
                                                                                                output_ids,
                                                                                                input_ids_summary,
@@ -510,7 +525,7 @@ def train(args):
         log_every_n_steps=5,
         callbacks=[checkpoint_callback, early_stopping],
         # lỗi cuda nên phải giảm từ 32 xuống 16
-        precision=16,
+        precision=32,
         limit_train_batches=args.limit_train_batches if args.limit_train_batches else 1.0,
         limit_val_batches=args.limit_val_batches if args.limit_val_batches else 1.0,
         num_sanity_val_steps=0
@@ -539,7 +554,7 @@ def test(args):
         # replace_sampler_ddp=False,
         log_every_n_steps=5,
         # lỗi cuda nên phải giảm từ 32 xuống 16
-        precision=16,
+        precision=32,
         limit_test_batches=args.limit_test_batches if args.limit_test_batches else 1.0
     )
 
