@@ -436,7 +436,7 @@ def train(args):
     trainer = pl.Trainer(
         devices=args.gpus,
         accelerator=args.accelerator,
-        auto_select_gpus=True,
+        # auto_select_gpus=True,
         strategy=args.speed_strategy,
         track_grad_norm=-1,
         max_steps=args.total_steps * args.accum_batch,
@@ -469,7 +469,7 @@ def test(args):
     # initialize trainer
     trainer = pl.Trainer(
         devices=1,
-        auto_select_gpus=True,
+        # auto_select_gpus=True,
         accelerator=args.accelerator,
         track_grad_norm=-1,
         max_steps=args.total_steps * args.accum_batch,
