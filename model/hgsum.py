@@ -165,10 +165,15 @@ class HGSummarizer(pl.LightningModule):
         if (output_ids < 0).any():
             print("Warning: Negative values in output_ids")
 
-        # Kiểm tra heterograph có valid không
-        if heterograph_source is not None:
-            print(f"Heterograph nodes: {heterograph_source.num_nodes}")
-            print(f"Heterograph edges: {heterograph_source.num_edges}")
+        # Debug kiểu dữ liệu
+        print(f"Type of heterograph_source: {type(heterograph_source)}")
+        print(f"Content of heterograph_source: {heterograph_source}")
+        
+        # Nếu là tuple, kiểm tra nội dung
+        if isinstance(heterograph_source, tuple):
+            print(f"Tuple length: {len(heterograph_source)}")
+            for i, item in enumerate(heterograph_source):
+                print(f"Item {i}: {type(item)}, shape: {getattr(item, 'shape', 'No shape')}")
 
         lm_logits, mgat_outputs_source, sagpooling_ouputs, mgat_outputs_summary = self.forward(input_ids_source,
                                                                                                output_ids,
