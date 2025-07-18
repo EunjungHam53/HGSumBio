@@ -32,7 +32,7 @@ from transformers.utils import (
     logging,
     replace_return_docstrings,
 )
-from configuration import LEDConfig
+from .configuration import LEDConfig
 
 from torch_geometric.data import HeteroData
 
