@@ -12,6 +12,8 @@ from pytorch_lightning import seed_everything
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 
+from transformers import LEDConfig
+
 # Can't run bcs the original code from huggingface is not capable with the graph structure and sagpooling 
 # from transformers import LEDTokenizer, LEDForConditionalGeneration
 from .tokenization import LEDTokenizer
@@ -56,7 +58,12 @@ class HGSummarizer(pl.LightningModule):
         self.args = args
 
         self.tokenizer = LEDTokenizer.from_pretrained(args.pretrained_primer)
-        self.model = LEDForConditionalGeneration.from_pretrained(args.pretrained_primer)
+        # self.model = LEDForConditionalGeneration.from_pretrained(args.pretrained_primer)
+        
+        config = LEDConfig.from_pretrained("allenai/led-base-16384")
+        config.use_graph = True 
+        self.model = LEDForConditionalGeneration(config)
+
         self.pad_token_id = self.tokenizer.pad_token_id
         self.use_ddp = self.args.speed_strategy == "ddp"
         self.docsep_token_id = self.tokenizer.convert_tokens_to_ids("<doc-sep>")
