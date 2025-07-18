@@ -3,7 +3,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 import jsonlines
 import time
-
+import torch
 
 
 def get_embeddings(samples, sbert, dataset_name, token_type):
