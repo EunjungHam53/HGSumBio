@@ -12,7 +12,8 @@ from pytorch_lightning import seed_everything
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 
-from .tokenization import LEDTokenizer
+# from .tokenization import LEDTokenizer
+from transformers import LEDTokenizer
 from .modeling import LEDForConditionalGeneration
 from .dataloading import get_dataloader_summ
 
