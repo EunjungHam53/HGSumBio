@@ -59,7 +59,7 @@ class HGSummarizer(pl.LightningModule):
 
         self.tokenizer = LEDTokenizer.from_pretrained(args.pretrained_primer)
         # self.model = LEDForConditionalGeneration.from_pretrained(args.pretrained_primer)
-        
+
         config = LEDConfig.from_pretrained("allenai/led-base-16384")
         config.use_graph = True 
         self.model = LEDForConditionalGeneration(config)
@@ -509,7 +509,8 @@ def train(args):
         logger=logger,
         log_every_n_steps=5,
         callbacks=[checkpoint_callback, early_stopping],
-        precision=32,
+        # lỗi cuda nên phải giảm từ 32 xuống 16
+        precision=16,
         limit_train_batches=args.limit_train_batches if args.limit_train_batches else 1.0,
         limit_val_batches=args.limit_val_batches if args.limit_val_batches else 1.0,
         num_sanity_val_steps=0
@@ -537,7 +538,8 @@ def test(args):
         max_steps=args.total_steps * args.accum_batch,
         # replace_sampler_ddp=False,
         log_every_n_steps=5,
-        precision=32,
+        # lỗi cuda nên phải giảm từ 32 xuống 16
+        precision=16,
         limit_test_batches=args.limit_test_batches if args.limit_test_batches else 1.0
     )
 
