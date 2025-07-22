@@ -126,6 +126,7 @@ class SummarizationDataset(Dataset):
                 output_ids), torch.tensor(input_ids_summary), heterograph_source, tokens_positions_source, sents_positions_source, docs_positions_source, heterograph_tgt, tokens_positions_tgt, sents_positions_tgt, tgt
 
 
+#DEBUG AND FIX 
 def collate_fn(batch):
     # A hack to know if this is bart or pegasus. DDP doesn't like global variables nor class-level memebr variables
     if batch[0][0][-1].item() == 2:
@@ -144,8 +145,15 @@ def collate_fn(batch):
         train = False
         tgt = [item[-1] for item in batch]
         batch = [item[:-1] for item in batch]
+    
     input_ids_source, output_ids, input_ids_summary, heterograph_source, words_positions_source, sents_positions_source, docs_positions_source, heterograph_tgt, words_positions_tgt, sents_positions_tgt = list(
         zip(*batch))
+    
+    # Lưu original lengths trước khi padding
+    original_lengths_source = [len(seq) for seq in input_ids_source]
+    original_lengths_summary = [len(seq) for seq in input_ids_summary]
+    
+    # Padding sequences
     input_ids_source = torch.nn.utils.rnn.pad_sequence(
         input_ids_source, batch_first=True, padding_value=pad_token_id
     )
@@ -155,10 +163,44 @@ def collate_fn(batch):
     input_ids_summary = torch.nn.utils.rnn.pad_sequence(
         input_ids_summary, batch_first=True, padding_value=pad_token_id
     )
+    
+    # FIX: Điều chỉnh positions để phù hợp với padded sequences
+    adjusted_words_positions_source = []
+    adjusted_sents_positions_source = []
+    adjusted_words_positions_tgt = []
+    adjusted_sents_positions_tgt = []
+    
+    for i in range(len(batch)):
+        # Adjust source positions
+        max_valid_pos_source = original_lengths_source[i] - 1
+        
+        # Filter và clamp words_positions_source
+        valid_words_pos_source = words_positions_source[i]
+        valid_words_pos_source = valid_words_pos_source[valid_words_pos_source <= max_valid_pos_source]
+        adjusted_words_positions_source.append(valid_words_pos_source)
+        
+        # Filter và clamp sents_positions_source
+        valid_sents_pos_source = sents_positions_source[i]
+        valid_sents_pos_source = valid_sents_pos_source[valid_sents_pos_source <= max_valid_pos_source]
+        adjusted_sents_positions_source.append(valid_sents_pos_source)
+        
+        # Adjust target positions  
+        max_valid_pos_tgt = original_lengths_summary[i] - 1
+        
+        # Filter và clamp words_positions_tgt
+        valid_words_pos_tgt = words_positions_tgt[i]
+        valid_words_pos_tgt = valid_words_pos_tgt[valid_words_pos_tgt <= max_valid_pos_tgt]
+        adjusted_words_positions_tgt.append(valid_words_pos_tgt)
+        
+        # Filter và clamp sents_positions_tgt
+        valid_sents_pos_tgt = sents_positions_tgt[i]
+        valid_sents_pos_tgt = valid_sents_pos_tgt[valid_sents_pos_tgt <= max_valid_pos_tgt]
+        adjusted_sents_positions_tgt.append(valid_sents_pos_tgt)
+    
     if train:
-        return input_ids_source, output_ids, input_ids_summary, heterograph_source, words_positions_source, sents_positions_source, docs_positions_source, heterograph_tgt, words_positions_tgt, sents_positions_tgt
+        return input_ids_source, output_ids, input_ids_summary, heterograph_source, adjusted_words_positions_source, adjusted_sents_positions_source, docs_positions_source, heterograph_tgt, adjusted_words_positions_tgt, adjusted_sents_positions_tgt
     else:
-        return input_ids_source, output_ids, input_ids_summary, heterograph_source, words_positions_source, sents_positions_source, docs_positions_source, heterograph_tgt, words_positions_tgt, sents_positions_tgt, tgt
+        return input_ids_source, output_ids, input_ids_summary, heterograph_source, adjusted_words_positions_source, adjusted_sents_positions_source, docs_positions_source, heterograph_tgt, adjusted_words_positions_tgt, adjusted_sents_positions_tgt, tgt
 
 
 def get_dataloader_summ(args, tokenizer, split_name, num_workers, is_shuffle):
