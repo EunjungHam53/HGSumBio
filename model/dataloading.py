@@ -167,6 +167,7 @@ def collate_fn(batch):
     # FIX: Điều chỉnh positions để đảm bảo không vượt quá bounds
     adjusted_words_positions_source = []
     adjusted_sents_positions_source = []
+    adjusted_docs_positions_source = []
     adjusted_words_positions_tgt = []
     adjusted_sents_positions_tgt = []
     
@@ -188,6 +189,12 @@ def collate_fn(batch):
         valid_sents_pos_source = valid_sents_pos_source[mask_sents_source]
         adjusted_sents_positions_source.append(valid_sents_pos_source)
         
+        # FIX: Filter docs_positions_source - đây là nguyên nhân chính của lỗi
+        valid_docs_pos_source = docs_positions_source[i]
+        mask_docs_source = valid_docs_pos_source < original_lengths_source[i]
+        valid_docs_pos_source = valid_docs_pos_source[mask_docs_source]
+        adjusted_docs_positions_source.append(valid_docs_pos_source)
+        
         # Adjust target positions tương tự
         max_valid_pos_tgt = original_lengths_summary[i] - 1
         
@@ -204,9 +211,9 @@ def collate_fn(batch):
         adjusted_sents_positions_tgt.append(valid_sents_pos_tgt)
     
     if train:
-        return input_ids_source, output_ids, input_ids_summary, heterograph_source, adjusted_words_positions_source, adjusted_sents_positions_source, docs_positions_source, heterograph_tgt, adjusted_words_positions_tgt, adjusted_sents_positions_tgt
+        return input_ids_source, output_ids, input_ids_summary, heterograph_source, adjusted_words_positions_source, adjusted_sents_positions_source, adjusted_docs_positions_source, heterograph_tgt, adjusted_words_positions_tgt, adjusted_sents_positions_tgt
     else:
-        return input_ids_source, output_ids, input_ids_summary, heterograph_source, adjusted_words_positions_source, adjusted_sents_positions_source, docs_positions_source, heterograph_tgt, adjusted_words_positions_tgt, adjusted_sents_positions_tgt, tgt
+        return input_ids_source, output_ids, input_ids_summary, heterograph_source, adjusted_words_positions_source, adjusted_sents_positions_source, adjusted_docs_positions_source, heterograph_tgt, adjusted_words_positions_tgt, adjusted_sents_positions_tgt, tgt
 
 def get_dataloader_summ(args, tokenizer, split_name, num_workers, is_shuffle):
     dataset_all = load_dataset('json', data_files=args.data_path + '%s_graph_noun_sentem.json' % args.dataset_name,
