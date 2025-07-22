@@ -2235,6 +2235,12 @@ class LEDModel(LEDPreTrainedModel):
             last_hidden_state_sample = last_hidden_state_sample.clone()
             heterograph_sample = heterograph[index % len(heterograph)].to(device)
             words_positions_source_sample = words_positions_source[index % len(words_positions_source)].to(device)
+
+            print("last_hidden_state_sample.shape[0]:", last_hidden_state_sample.shape[0])
+            print("max index in words_positions_source_sample:", words_positions_source_sample.max().item())
+            print("words_positions_source_sample:", words_positions_source_sample)
+
+
             heterograph_sample["token"].x = torch.index_select(last_hidden_state_sample, 0,
                                                                words_positions_source_sample)
             sents_positions_source_sample = sents_positions_source[index % len(sents_positions_source)].to(device)
