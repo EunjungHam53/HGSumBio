@@ -32,6 +32,12 @@ def safe_index_select(tensor, positions, dim=0, tensor_name="tensor"):
     """
     Safely index select tensor using positions, ensuring no out-of-bounds access
     """
+    # Convert to tensor if it's a list
+    if isinstance(positions, list):
+        positions = torch.tensor(positions, device=tensor.device)
+    elif not isinstance(positions, torch.Tensor):
+        positions = torch.tensor(positions, device=tensor.device)
+    
     if len(positions) == 0:
         print(f"WARNING: positions is empty for {tensor_name}")
         if dim == 0:
@@ -40,6 +46,9 @@ def safe_index_select(tensor, positions, dim=0, tensor_name="tensor"):
         else:
             return torch.empty(tensor.shape[0], 0, 
                               dtype=tensor.dtype, device=tensor.device)
+    
+    # Ensure positions is on the same device as tensor
+    positions = positions.to(tensor.device)
     
     # Validate positions
     max_idx = tensor.shape[dim] - 1
@@ -75,6 +84,18 @@ def validate_and_fix_positions(tensor, positions, tensor_name="tensor", position
     """
     Validate that positions are within tensor bounds and fix if necessary
     """
+    # CRITICAL FIX: Convert list to tensor first
+    if isinstance(positions, list):
+        if len(positions) == 0:
+            print(f"WARNING: {positions_name} is empty list for {tensor_name}")
+            return torch.tensor([], dtype=torch.long, device=tensor.device)
+        positions = torch.tensor(positions, dtype=torch.long, device=tensor.device)
+    elif not isinstance(positions, torch.Tensor):
+        positions = torch.tensor(positions, dtype=torch.long, device=tensor.device)
+    
+    # Ensure positions is on the same device as tensor
+    positions = positions.to(tensor.device)
+    
     if len(positions) == 0:
         print(f"WARNING: {positions_name} is empty for {tensor_name}")
         return positions
@@ -210,37 +231,62 @@ class HGSummarizer(pl.LightningModule):
         # return lm_logits, outputs_source.mgat_outputs, outputs_source.sagpooling_outputs, None
 
     def forward(self, input_ids_source, output_ids, input_ids_summary, heterograph_source, words_positions_source,
-        sents_positions_source, docs_positions_source, heterograph_tgt, words_positions_tgt, sents_positions_tgt):
+            sents_positions_source, docs_positions_source, heterograph_tgt, words_positions_tgt, sents_positions_tgt):
         device = input_ids_source.device
         
-        # Debug thông tin đầu vào
+        # Debug input information
         print(f"DEBUG: input_ids_source shape: {input_ids_source.shape}")
-        if hasattr(words_positions_source, 'shape'):
-            print(f"DEBUG: words_positions_source shape: {words_positions_source.shape}")
-            if len(words_positions_source) > 0:
-                print(f"DEBUG: words_positions_source range: [{words_positions_source.min()}, {words_positions_source.max()}]")
+        print(f"DEBUG: words_positions_source type: {type(words_positions_source)}")
+        
+        # Handle positions - convert lists to tensors
+        def process_positions(positions, name):
+            if positions is None:
+                return None
+            
+            if isinstance(positions, list):
+                # Handle list of tensors (batch)
+                if len(positions) > 0 and isinstance(positions[0], torch.Tensor):
+                    # This is a batch - take the first item for now
+                    positions = positions[0]
+                elif isinstance(positions, list):
+                    # This is a simple list
+                    if len(positions) == 0:
+                        return torch.tensor([], dtype=torch.long, device=device)
+                    positions = torch.tensor(positions, dtype=torch.long, device=device)
+            
+            if isinstance(positions, torch.Tensor):
+                positions = positions.to(device)
+            
+            print(f"DEBUG: {name} processed - type: {type(positions)}, len: {len(positions) if positions is not None else 0}")
+            return positions
+        
+        # Process all positions
+        words_positions_source = process_positions(words_positions_source, "words_positions_source")
+        sents_positions_source = process_positions(sents_positions_source, "sents_positions_source")
+        docs_positions_source = process_positions(docs_positions_source, "docs_positions_source")
+        words_positions_tgt = process_positions(words_positions_tgt, "words_positions_tgt")
+        sents_positions_tgt = process_positions(sents_positions_tgt, "sents_positions_tgt")
         
         decoder_input_ids = output_ids[:, :-1]
         
-        # get the input ids and attention masks together
+        # Get the input ids and attention masks together
         global_attention_mask_source = torch.zeros_like(input_ids_source).to(device)
-        # put global attention on <s> token
+        # Put global attention on <s> token
         global_attention_mask_source[:, 0] = 1
-        # put global attention on <doc-sep> token
+        # Put global attention on <doc-sep> token
         global_attention_mask_source[input_ids_source == self.docsep_token_id] = 1
-        # put global attention on <sent-sep> token
+        # Put global attention on <sent-sep> token
         global_attention_mask_source[input_ids_source == self.sentsep_token_id] = 1
 
         attention_mask = torch.ones_like(input_ids_source).to(device)
         attention_mask = attention_mask.type_as(input_ids_source)
         attention_mask[input_ids_source == self.pad_token_id] = 0
         
-        # CRITICAL FIX: Validate positions trước khi truyền vào model
+        # CRITICAL FIX: Validate positions before passing to model
         if words_positions_source is not None and len(words_positions_source) > 0:
-            # Giả sử input_ids_source.shape[1] là sequence length tối đa
-            max_seq_len = input_ids_source.shape[1] - 1  # -1 vì index bắt đầu từ 0
+            max_seq_len = input_ids_source.shape[1] - 1  # -1 because index starts from 0
             words_positions_source = validate_and_fix_positions(
-                torch.zeros(max_seq_len + 1), # dummy tensor để validate
+                torch.zeros(max_seq_len + 1), # dummy tensor for validation
                 words_positions_source,
                 "input_sequence",
                 "words_positions_source"
@@ -265,7 +311,7 @@ class HGSummarizer(pl.LightningModule):
             )
         
         try:
-            # encoding source documents
+            # Encoding source documents
             outputs_source = self.model(
                 input_ids_source,
                 attention_mask=attention_mask,
@@ -288,7 +334,7 @@ class HGSummarizer(pl.LightningModule):
         lm_logits = outputs_source.logits
         assert lm_logits.shape[-1] == self.model.config.vocab_size
 
-        # encoding summary - tương tự validate cho target positions
+        # Encoding summary - similarly validate for target positions
         if words_positions_tgt is not None and len(words_positions_tgt) > 0:
             max_seq_len = input_ids_summary.shape[1] - 1
             words_positions_tgt = validate_and_fix_positions(
@@ -307,11 +353,11 @@ class HGSummarizer(pl.LightningModule):
                 "sents_positions_tgt"
             )
 
-        # get the input ids and attention masks together
+        # Get the input ids and attention masks together
         global_attention_mask_summary = torch.zeros_like(input_ids_summary).to(device)
-        # put global attention on <s> token
+        # Put global attention on <s> token
         global_attention_mask_summary[:, 0] = 1
-        # put global attention on <sent-sep> token
+        # Put global attention on <sent-sep> token
         global_attention_mask_summary[input_ids_summary == self.sentsep_token_id] = 1
         
         try:
@@ -421,7 +467,7 @@ class HGSummarizer(pl.LightningModule):
         print(f"input_ids_source shape: {input_ids_source.shape}")
         print(f"output_ids shape: {output_ids.shape}")
         
-        # CRITICAL: Validate output_ids trước khi sử dụng
+        # CRITICAL: Validate output_ids before using
         if (output_ids < 0).any():
             print("WARNING: Negative values in output_ids detected, clamping to 0")
             output_ids = torch.clamp(output_ids, min=0)
@@ -447,13 +493,13 @@ class HGSummarizer(pl.LightningModule):
         except RuntimeError as e:
             print(f"CUDA error in forward pass:")
             print(f"Error: {e}")
-            # Log thêm thông tin debug
+            # Log additional debug information
             if words_positions_source is not None:
-                print(f"words_positions_source device: {words_positions_source.device}")
-                print(f"words_positions_source dtype: {words_positions_source.dtype}")
+                print(f"words_positions_source device: {getattr(words_positions_source, 'device', 'N/A')}")
+                print(f"words_positions_source dtype: {getattr(words_positions_source, 'dtype', 'N/A')}")
             raise e
 
-        # graph similarity loss
+        # Graph similarity loss
         cos = torch.nn.CosineSimilarity(dim=1)
         
         # Validate tensors before computing similarity
@@ -471,7 +517,7 @@ class HGSummarizer(pl.LightningModule):
             
             graph_sim = torch.mean(cos(sagpooling_ouputs, mgat_outputs_summary))
         
-        # cross-entropy loss
+        # Cross-entropy loss
         labels = output_ids[:, 1:].clone()
         
         # Validate labels
@@ -482,6 +528,7 @@ class HGSummarizer(pl.LightningModule):
             loss = ce_loss_fct(lm_logits.view(-1, lm_logits.shape[-1]), labels.view(-1))
         else:
             lprobs = torch.nn.functional.log_softmax(lm_logits, dim=-1)
+            # Assuming you have this function defined elsewhere
             loss, nll_loss = label_smoothed_nll_loss(
                 lprobs, labels, self.args.label_smoothing, ignore_index=self.pad_token_id
             )
