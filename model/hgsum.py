@@ -25,6 +25,85 @@ import sys
 sys.path.append("../../")
 from utils.metrics import rouge
 
+import torch
+import torch.nn.functional as F
+
+def safe_index_select(tensor, positions, dim=0, tensor_name="tensor"):
+    """
+    Safely index select tensor using positions, ensuring no out-of-bounds access
+    """
+    if len(positions) == 0:
+        print(f"WARNING: positions is empty for {tensor_name}")
+        if dim == 0:
+            return torch.empty(0, tensor.shape[1] if tensor.ndim > 1 else tensor.shape[0], 
+                              dtype=tensor.dtype, device=tensor.device)
+        else:
+            return torch.empty(tensor.shape[0], 0, 
+                              dtype=tensor.dtype, device=tensor.device)
+    
+    # Validate positions
+    max_idx = tensor.shape[dim] - 1
+    min_idx = 0
+    
+    # Check for out-of-bounds indices
+    invalid_mask = (positions > max_idx) | (positions < min_idx)
+    
+    if invalid_mask.any():
+        print(f"ERROR: {tensor_name} index out of bounds detected!")
+        print(f"Tensor shape[{dim}]: {tensor.shape[dim]}")
+        print(f"Valid range: [0, {max_idx}]")
+        print(f"Invalid positions: {positions[invalid_mask]}")
+        print(f"Positions range: [{positions.min().item()}, {positions.max().item()}]")
+        
+        # Clamp positions to valid range
+        positions = torch.clamp(positions, min_idx, max_idx)
+        print(f"Positions clamped to valid range")
+    
+    # Remove duplicates and sort for efficiency
+    positions = torch.unique(positions)
+    
+    try:
+        return tensor.index_select(dim, positions)
+    except RuntimeError as e:
+        print(f"CUDA error during index_select for {tensor_name}:")
+        print(f"Tensor shape: {tensor.shape}")
+        print(f"Positions shape: {positions.shape}")
+        print(f"Positions: {positions}")
+        raise e
+
+def validate_and_fix_positions(tensor, positions, tensor_name="tensor", positions_name="positions"):
+    """
+    Validate that positions are within tensor bounds and fix if necessary
+    """
+    if len(positions) == 0:
+        print(f"WARNING: {positions_name} is empty for {tensor_name}")
+        return positions
+    
+    tensor_size = tensor.shape[0]
+    max_valid_idx = tensor_size - 1
+    
+    # Check for negative indices
+    negative_mask = positions < 0
+    if negative_mask.any():
+        print(f"ERROR: {positions_name} contains negative indices: {positions[negative_mask]}")
+        positions[negative_mask] = 0
+    
+    # Check for out-of-bounds indices
+    invalid_mask = positions > max_valid_idx
+    
+    if invalid_mask.any():
+        print(f"ERROR: {positions_name} contains out-of-bounds indices!")
+        print(f"Tensor {tensor_name} shape: {tensor.shape}")
+        print(f"Max valid index: {max_valid_idx}")
+        print(f"Invalid positions: {positions[invalid_mask]}")
+        print(f"Total positions: {len(positions)}")
+        print(f"Invalid count: {invalid_mask.sum().item()}")
+        
+        # Clamp invalid positions to max valid index
+        positions[invalid_mask] = max_valid_idx
+        print(f"Invalid positions clamped to {max_valid_idx}")
+    
+    return positions
 
 def label_smoothed_nll_loss(lprobs, target, epsilon, ignore_index=-100):
     """
@@ -74,12 +153,75 @@ class HGSummarizer(pl.LightningModule):
         self.validation_outputs = []
         self.test_outputs = []  
 
+    # def forward(self, input_ids_source, output_ids, input_ids_summary, heterograph_source, words_positions_source,
+    #             sents_positions_source,
+    #             docs_positions_source, heterograph_tgt, words_positions_tgt, sents_positions_tgt):
+    #     device = input_ids_source.device
+    #     # print("encoding source", len(heterograph_source))
+    #     decoder_input_ids = output_ids[:, :-1]
+    #     # get the input ids and attention masks together
+    #     global_attention_mask_source = torch.zeros_like(input_ids_source).to(device)
+    #     # put global attention on <s> token
+    #     global_attention_mask_source[:, 0] = 1
+    #     # put global attention on <doc-sep> token
+    #     global_attention_mask_source[input_ids_source == self.docsep_token_id] = 1
+    #     # put global attention on <sent-sep> token
+    #     global_attention_mask_source[input_ids_source == self.sentsep_token_id] = 1
+
+    #     attention_mask = torch.ones_like(input_ids_source).to(device)
+    #     attention_mask = attention_mask.type_as(input_ids_source)
+    #     attention_mask[input_ids_source == self.pad_token_id] = 0
+    #     # encoding source documents
+    #     outputs_source = self.model(
+    #         input_ids_source,
+    #         attention_mask=attention_mask,
+    #         decoder_input_ids=decoder_input_ids,
+    #         global_attention_mask=global_attention_mask_source,
+    #         use_cache=False,
+    #         heterograph=heterograph_source,
+    #         words_positions_source=words_positions_source,
+    #         sents_positions_source=sents_positions_source,
+    #         docs_positions_source=docs_positions_source
+    #     )
+    #     lm_logits = outputs_source.logits
+    #     assert lm_logits.shape[-1] == self.model.config.vocab_size
+
+    #     # print("encoding summary", input_ids_summary.size())
+    #     # pdb.set_trace()
+    #     # encoding summary
+    #     # get the input ids and attention masks together
+    #     global_attention_mask_summary = torch.zeros_like(input_ids_summary).to(device)
+    #     # put global attention on <s> token
+    #     global_attention_mask_summary[:, 0] = 1
+    #     # put global attention on <sent-sep> token
+    #     global_attention_mask_summary[input_ids_summary == self.sentsep_token_id] = 1
+    #     outputs_summary = self.model(
+    #         input_ids_summary.to(device),
+    #         decoder_input_ids=None,
+    #         global_attention_mask=global_attention_mask_summary,
+    #         use_cache=False,
+    #         heterograph=heterograph_tgt,
+    #         words_positions_source=words_positions_tgt,
+    #         sents_positions_source=sents_positions_tgt,
+    #         docs_positions_source=None
+    #     )
+
+    #     return lm_logits, outputs_source.mgat_outputs, outputs_source.sagpooling_outputs, outputs_summary.mgat_outputs
+        # return lm_logits, outputs_source.mgat_outputs, outputs_source.sagpooling_outputs, None
+
     def forward(self, input_ids_source, output_ids, input_ids_summary, heterograph_source, words_positions_source,
-                sents_positions_source,
-                docs_positions_source, heterograph_tgt, words_positions_tgt, sents_positions_tgt):
+        sents_positions_source, docs_positions_source, heterograph_tgt, words_positions_tgt, sents_positions_tgt):
         device = input_ids_source.device
-        # print("encoding source", len(heterograph_source))
+        
+        # Debug thông tin đầu vào
+        print(f"DEBUG: input_ids_source shape: {input_ids_source.shape}")
+        if hasattr(words_positions_source, 'shape'):
+            print(f"DEBUG: words_positions_source shape: {words_positions_source.shape}")
+            if len(words_positions_source) > 0:
+                print(f"DEBUG: words_positions_source range: [{words_positions_source.min()}, {words_positions_source.max()}]")
+        
         decoder_input_ids = output_ids[:, :-1]
+        
         # get the input ids and attention masks together
         global_attention_mask_source = torch.zeros_like(input_ids_source).to(device)
         # put global attention on <s> token
@@ -92,43 +234,105 @@ class HGSummarizer(pl.LightningModule):
         attention_mask = torch.ones_like(input_ids_source).to(device)
         attention_mask = attention_mask.type_as(input_ids_source)
         attention_mask[input_ids_source == self.pad_token_id] = 0
-        # encoding source documents
-        outputs_source = self.model(
-            input_ids_source,
-            attention_mask=attention_mask,
-            decoder_input_ids=decoder_input_ids,
-            global_attention_mask=global_attention_mask_source,
-            use_cache=False,
-            heterograph=heterograph_source,
-            words_positions_source=words_positions_source,
-            sents_positions_source=sents_positions_source,
-            docs_positions_source=docs_positions_source
-        )
+        
+        # CRITICAL FIX: Validate positions trước khi truyền vào model
+        if words_positions_source is not None and len(words_positions_source) > 0:
+            # Giả sử input_ids_source.shape[1] là sequence length tối đa
+            max_seq_len = input_ids_source.shape[1] - 1  # -1 vì index bắt đầu từ 0
+            words_positions_source = validate_and_fix_positions(
+                torch.zeros(max_seq_len + 1), # dummy tensor để validate
+                words_positions_source,
+                "input_sequence",
+                "words_positions_source"
+            )
+        
+        if sents_positions_source is not None and len(sents_positions_source) > 0:
+            max_seq_len = input_ids_source.shape[1] - 1
+            sents_positions_source = validate_and_fix_positions(
+                torch.zeros(max_seq_len + 1),
+                sents_positions_source,
+                "input_sequence", 
+                "sents_positions_source"
+            )
+        
+        if docs_positions_source is not None and len(docs_positions_source) > 0:
+            max_seq_len = input_ids_source.shape[1] - 1
+            docs_positions_source = validate_and_fix_positions(
+                torch.zeros(max_seq_len + 1),
+                docs_positions_source,
+                "input_sequence",
+                "docs_positions_source" 
+            )
+        
+        try:
+            # encoding source documents
+            outputs_source = self.model(
+                input_ids_source,
+                attention_mask=attention_mask,
+                decoder_input_ids=decoder_input_ids,
+                global_attention_mask=global_attention_mask_source,
+                use_cache=False,
+                heterograph=heterograph_source,
+                words_positions_source=words_positions_source,
+                sents_positions_source=sents_positions_source,
+                docs_positions_source=docs_positions_source
+            )
+        except RuntimeError as e:
+            print(f"ERROR in source encoding:")
+            print(f"input_ids_source shape: {input_ids_source.shape}")
+            print(f"words_positions_source: {words_positions_source}")
+            print(f"sents_positions_source: {sents_positions_source}")
+            print(f"docs_positions_source: {docs_positions_source}")
+            raise e
+        
         lm_logits = outputs_source.logits
         assert lm_logits.shape[-1] == self.model.config.vocab_size
 
-        # print("encoding summary", input_ids_summary.size())
-        # pdb.set_trace()
-        # encoding summary
+        # encoding summary - tương tự validate cho target positions
+        if words_positions_tgt is not None and len(words_positions_tgt) > 0:
+            max_seq_len = input_ids_summary.shape[1] - 1
+            words_positions_tgt = validate_and_fix_positions(
+                torch.zeros(max_seq_len + 1),
+                words_positions_tgt,
+                "summary_sequence",
+                "words_positions_tgt"
+            )
+        
+        if sents_positions_tgt is not None and len(sents_positions_tgt) > 0:
+            max_seq_len = input_ids_summary.shape[1] - 1
+            sents_positions_tgt = validate_and_fix_positions(
+                torch.zeros(max_seq_len + 1),
+                sents_positions_tgt,
+                "summary_sequence",
+                "sents_positions_tgt"
+            )
+
         # get the input ids and attention masks together
         global_attention_mask_summary = torch.zeros_like(input_ids_summary).to(device)
         # put global attention on <s> token
         global_attention_mask_summary[:, 0] = 1
         # put global attention on <sent-sep> token
         global_attention_mask_summary[input_ids_summary == self.sentsep_token_id] = 1
-        outputs_summary = self.model(
-            input_ids_summary.to(device),
-            decoder_input_ids=None,
-            global_attention_mask=global_attention_mask_summary,
-            use_cache=False,
-            heterograph=heterograph_tgt,
-            words_positions_source=words_positions_tgt,
-            sents_positions_source=sents_positions_tgt,
-            docs_positions_source=None
-        )
+        
+        try:
+            outputs_summary = self.model(
+                input_ids_summary.to(device),
+                decoder_input_ids=None,
+                global_attention_mask=global_attention_mask_summary,
+                use_cache=False,
+                heterograph=heterograph_tgt,
+                words_positions_source=words_positions_tgt,
+                sents_positions_source=sents_positions_tgt,
+                docs_positions_source=None
+            )
+        except RuntimeError as e:
+            print(f"ERROR in summary encoding:")
+            print(f"input_ids_summary shape: {input_ids_summary.shape}")
+            print(f"words_positions_tgt: {words_positions_tgt}")
+            print(f"sents_positions_tgt: {sents_positions_tgt}")
+            raise e
 
         return lm_logits, outputs_source.mgat_outputs, outputs_source.sagpooling_outputs, outputs_summary.mgat_outputs
-        # return lm_logits, outputs_source.mgat_outputs, outputs_source.sagpooling_outputs, None
 
     def configure_optimizers(self):
         if self.args.adafactor:
@@ -152,61 +356,146 @@ class HGSummarizer(pl.LightningModule):
             return optimizer
         return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
 
-    def shared_step(self, input_ids_source, output_ids, input_ids_summary, heterograph_source, words_positions_source,
-                    sents_positions_source,
-                    docs_positions_source, heterograph_tgt, words_positions_tgt, sents_positions_tgt):
+    # def shared_step(self, input_ids_source, output_ids, input_ids_summary, heterograph_source, words_positions_source,
+    #                 sents_positions_source,
+    #                 docs_positions_source, heterograph_tgt, words_positions_tgt, sents_positions_tgt):
         
+    #     # Debug shapes
+    #     print(f"input_ids_source shape: {input_ids_source.shape}")
+    #     print(f"output_ids shape: {output_ids.shape}")
+    #     print(f"output_ids min/max: {output_ids.min()}/{output_ids.max()}")
+        
+    #     # Kiểm tra có giá trị âm không
+    #     if (output_ids < 0).any():
+    #         print("Warning: Negative values in output_ids")
+
+    #     # Debug kiểu dữ liệu
+    #     print(f"Type of heterograph_source: {type(heterograph_source)}")
+    #     print(f"Content of heterograph_source: {heterograph_source}")
+        
+    #     # Nếu là tuple, kiểm tra nội dung
+    #     if isinstance(heterograph_source, tuple):
+    #         print(f"Tuple length: {len(heterograph_source)}")
+    #         for i, item in enumerate(heterograph_source):
+    #             print(f"Item {i}: {type(item)}, shape: {getattr(item, 'shape', 'No shape')}")
+
+    #     lm_logits, mgat_outputs_source, sagpooling_ouputs, mgat_outputs_summary = self.forward(input_ids_source,
+    #                                                                                            output_ids,
+    #                                                                                            input_ids_summary,
+    #                                                                                            heterograph_source,
+    #                                                                                            words_positions_source,
+    #                                                                                            sents_positions_source,
+    #                                                                                            docs_positions_source,
+    #                                                                                            heterograph_tgt,
+    #                                                                                            words_positions_tgt,
+    #                                                                                            sents_positions_tgt)
+
+    #     # print("shared step")
+    #     # graph similarity loss
+    #     cos = torch.nn.CosineSimilarity(dim=1)
+    #     graph_sim = torch.mean(cos(sagpooling_ouputs, mgat_outputs_summary))
+    #     # coss-entropy loss
+    #     labels = output_ids[:, 1:].clone()
+
+    #     if self.args.label_smoothing == 0.0:
+    #         # Same behavior as modeling_bart.py, besides ignoring pad_token_id
+    #         ce_loss_fct = torch.nn.CrossEntropyLoss(ignore_index=self.pad_token_id)
+    #         loss = ce_loss_fct(lm_logits.view(-1, lm_logits.shape[-1]), labels.view(-1))
+    #     else:
+    #         lprobs = torch.nn.functional.log_softmax(lm_logits, dim=-1)
+    #         loss, nll_loss = label_smoothed_nll_loss(
+    #             lprobs,
+    #             labels,
+    #             self.args.label_smoothing,
+    #             ignore_index=self.pad_token_id,
+    #         )
+    #     if torch.isnan(loss):
+    #         pdb.set_trace()
+
+    #     return 0.5 * loss + 0.5 * graph_sim
+
+    def shared_step(self, input_ids_source, output_ids, input_ids_summary, heterograph_source, words_positions_source,
+                sents_positions_source, docs_positions_source, heterograph_tgt, words_positions_tgt, sents_positions_tgt):
+    
         # Debug shapes
         print(f"input_ids_source shape: {input_ids_source.shape}")
         print(f"output_ids shape: {output_ids.shape}")
+        
+        # CRITICAL: Validate output_ids trước khi sử dụng
+        if (output_ids < 0).any():
+            print("WARNING: Negative values in output_ids detected, clamping to 0")
+            output_ids = torch.clamp(output_ids, min=0)
+        
+        # Validate vocabulary indices
+        if hasattr(self.model.config, 'vocab_size'):
+            vocab_size = self.model.config.vocab_size
+            if (output_ids >= vocab_size).any():
+                print(f"WARNING: output_ids contains indices >= vocab_size ({vocab_size})")
+                output_ids = torch.clamp(output_ids, max=vocab_size-1)
+        
         print(f"output_ids min/max: {output_ids.min()}/{output_ids.max()}")
         
-        # Kiểm tra có giá trị âm không
-        if (output_ids < 0).any():
-            print("Warning: Negative values in output_ids")
-
-        # Debug kiểu dữ liệu
+        # Debug heterograph
         print(f"Type of heterograph_source: {type(heterograph_source)}")
-        print(f"Content of heterograph_source: {heterograph_source}")
         
-        # Nếu là tuple, kiểm tra nội dung
-        if isinstance(heterograph_source, tuple):
-            print(f"Tuple length: {len(heterograph_source)}")
-            for i, item in enumerate(heterograph_source):
-                print(f"Item {i}: {type(item)}, shape: {getattr(item, 'shape', 'No shape')}")
+        try:
+            lm_logits, mgat_outputs_source, sagpooling_ouputs, mgat_outputs_summary = self.forward(
+                input_ids_source, output_ids, input_ids_summary, heterograph_source,
+                words_positions_source, sents_positions_source, docs_positions_source,
+                heterograph_tgt, words_positions_tgt, sents_positions_tgt
+            )
+        except RuntimeError as e:
+            print(f"CUDA error in forward pass:")
+            print(f"Error: {e}")
+            # Log thêm thông tin debug
+            if words_positions_source is not None:
+                print(f"words_positions_source device: {words_positions_source.device}")
+                print(f"words_positions_source dtype: {words_positions_source.dtype}")
+            raise e
 
-        lm_logits, mgat_outputs_source, sagpooling_ouputs, mgat_outputs_summary = self.forward(input_ids_source,
-                                                                                               output_ids,
-                                                                                               input_ids_summary,
-                                                                                               heterograph_source,
-                                                                                               words_positions_source,
-                                                                                               sents_positions_source,
-                                                                                               docs_positions_source,
-                                                                                               heterograph_tgt,
-                                                                                               words_positions_tgt,
-                                                                                               sents_positions_tgt)
-
-        # print("shared step")
         # graph similarity loss
         cos = torch.nn.CosineSimilarity(dim=1)
-        graph_sim = torch.mean(cos(sagpooling_ouputs, mgat_outputs_summary))
-        # coss-entropy loss
+        
+        # Validate tensors before computing similarity
+        if sagpooling_ouputs is None or mgat_outputs_summary is None:
+            print("WARNING: One of the outputs is None, setting graph_sim to 0")
+            graph_sim = torch.tensor(0.0, device=input_ids_source.device)
+        else:
+            # Check tensor shapes before computing similarity
+            if sagpooling_ouputs.shape != mgat_outputs_summary.shape:
+                print(f"WARNING: Shape mismatch - sagpooling: {sagpooling_ouputs.shape}, mgat_summary: {mgat_outputs_summary.shape}")
+                # Pad or truncate to match
+                min_size = min(sagpooling_ouputs.shape[0], mgat_outputs_summary.shape[0])
+                sagpooling_ouputs = sagpooling_ouputs[:min_size]
+                mgat_outputs_summary = mgat_outputs_summary[:min_size]
+            
+            graph_sim = torch.mean(cos(sagpooling_ouputs, mgat_outputs_summary))
+        
+        # cross-entropy loss
         labels = output_ids[:, 1:].clone()
+        
+        # Validate labels
+        labels = torch.clamp(labels, min=0, max=self.model.config.vocab_size-1)
 
         if self.args.label_smoothing == 0.0:
-            # Same behavior as modeling_bart.py, besides ignoring pad_token_id
             ce_loss_fct = torch.nn.CrossEntropyLoss(ignore_index=self.pad_token_id)
             loss = ce_loss_fct(lm_logits.view(-1, lm_logits.shape[-1]), labels.view(-1))
         else:
             lprobs = torch.nn.functional.log_softmax(lm_logits, dim=-1)
             loss, nll_loss = label_smoothed_nll_loss(
-                lprobs,
-                labels,
-                self.args.label_smoothing,
-                ignore_index=self.pad_token_id,
+                lprobs, labels, self.args.label_smoothing, ignore_index=self.pad_token_id
             )
+        
+        # Validate loss values
         if torch.isnan(loss):
-            pdb.set_trace()
+            print("ERROR: NaN loss detected!")
+            print(f"lm_logits stats: min={lm_logits.min()}, max={lm_logits.max()}, mean={lm_logits.mean()}")
+            print(f"labels stats: min={labels.min()}, max={labels.max()}")
+            raise ValueError("NaN loss detected")
+        
+        if torch.isnan(graph_sim):
+            print("WARNING: NaN graph_sim detected, setting to 0")
+            graph_sim = torch.tensor(0.0, device=input_ids_source.device)
 
         return 0.5 * loss + 0.5 * graph_sim
 

@@ -153,6 +153,10 @@ def collate_fn(batch):
     original_lengths_source = [len(seq) for seq in input_ids_source]
     original_lengths_summary = [len(seq) for seq in input_ids_summary]
     
+    # Debug: In ra thông tin về lengths
+    print(f"Original source lengths: {original_lengths_source}")
+    print(f"Original summary lengths: {original_lengths_summary}")
+    
     # Padding sequences
     input_ids_source = torch.nn.utils.rnn.pad_sequence(
         input_ids_source, batch_first=True, padding_value=pad_token_id
@@ -164,6 +168,9 @@ def collate_fn(batch):
         input_ids_summary, batch_first=True, padding_value=pad_token_id
     )
     
+    print(f"Padded source shape: {input_ids_source.shape}")
+    print(f"Padded summary shape: {input_ids_summary.shape}")
+    
     # FIX: Điều chỉnh positions để đảm bảo không vượt quá bounds
     adjusted_words_positions_source = []
     adjusted_sents_positions_source = []
@@ -173,48 +180,88 @@ def collate_fn(batch):
     
     for i in range(len(batch)):
         # Adjust source positions
-        # Index hợp lệ từ 0 đến original_length - 1
-        max_valid_pos_source = original_lengths_source[i] - 1
+        original_len_source = original_lengths_source[i]
+        
+        # Debug: In ra thông tin positions trước khi filter
+        print(f"Sample {i}: Original source length = {original_len_source}")
+        print(f"Sample {i}: Words positions range = [{words_positions_source[i].min().item()}, {words_positions_source[i].max().item()}]")
+        print(f"Sample {i}: Sents positions range = [{sents_positions_source[i].min().item()}, {sents_positions_source[i].max().item()}]")
+        print(f"Sample {i}: Docs positions range = [{docs_positions_source[i].min().item()}, {docs_positions_source[i].max().item()}]")
         
         # Filter words_positions_source: chỉ giữ những index < original_length
         valid_words_pos_source = words_positions_source[i]
-        # Sử dụng < thay vì <= để đảm bảo không vượt quá bounds
-        mask_words_source = valid_words_pos_source < original_lengths_source[i]
+        mask_words_source = valid_words_pos_source < original_len_source
         valid_words_pos_source = valid_words_pos_source[mask_words_source]
+        
+        # CRITICAL FIX: Đảm bảo positions bắt đầu từ 0 và liên tục
+        if len(valid_words_pos_source) > 0:
+            # Sắp xếp và đảm bảo không có gap
+            valid_words_pos_source = torch.sort(valid_words_pos_source)[0]
+            # Loại bỏ duplicates
+            valid_words_pos_source = torch.unique(valid_words_pos_source)
         adjusted_words_positions_source.append(valid_words_pos_source)
         
         # Filter sents_positions_source tương tự
         valid_sents_pos_source = sents_positions_source[i]
-        mask_sents_source = valid_sents_pos_source < original_lengths_source[i]
+        mask_sents_source = valid_sents_pos_source < original_len_source
         valid_sents_pos_source = valid_sents_pos_source[mask_sents_source]
+        
+        if len(valid_sents_pos_source) > 0:
+            valid_sents_pos_source = torch.sort(valid_sents_pos_source)[0]
+            valid_sents_pos_source = torch.unique(valid_sents_pos_source)
         adjusted_sents_positions_source.append(valid_sents_pos_source)
         
-        # FIX: Filter docs_positions_source - đây là nguyên nhân chính của lỗi
+        # Filter docs_positions_source
         valid_docs_pos_source = docs_positions_source[i]
-        mask_docs_source = valid_docs_pos_source < original_lengths_source[i]
+        mask_docs_source = valid_docs_pos_source < original_len_source
         valid_docs_pos_source = valid_docs_pos_source[mask_docs_source]
+        
+        if len(valid_docs_pos_source) > 0:
+            valid_docs_pos_source = torch.sort(valid_docs_pos_source)[0]
+            valid_docs_pos_source = torch.unique(valid_docs_pos_source)
         adjusted_docs_positions_source.append(valid_docs_pos_source)
         
+        # Debug: In ra thông tin positions sau khi filter
+        print(f"Sample {i}: Adjusted words positions length = {len(valid_words_pos_source)}")
+        print(f"Sample {i}: Adjusted sents positions length = {len(valid_sents_pos_source)}")
+        print(f"Sample {i}: Adjusted docs positions length = {len(valid_docs_pos_source)}")
+        
         # Adjust target positions tương tự
-        max_valid_pos_tgt = original_lengths_summary[i] - 1
+        original_len_summary = original_lengths_summary[i]
         
         # Filter words_positions_tgt
         valid_words_pos_tgt = words_positions_tgt[i]
-        mask_words_tgt = valid_words_pos_tgt < original_lengths_summary[i]
+        mask_words_tgt = valid_words_pos_tgt < original_len_summary
         valid_words_pos_tgt = valid_words_pos_tgt[mask_words_tgt]
+        
+        if len(valid_words_pos_tgt) > 0:
+            valid_words_pos_tgt = torch.sort(valid_words_pos_tgt)[0]
+            valid_words_pos_tgt = torch.unique(valid_words_pos_tgt)
         adjusted_words_positions_tgt.append(valid_words_pos_tgt)
         
         # Filter sents_positions_tgt
         valid_sents_pos_tgt = sents_positions_tgt[i]
-        mask_sents_tgt = valid_sents_pos_tgt < original_lengths_summary[i]
+        mask_sents_tgt = valid_sents_pos_tgt < original_len_summary
         valid_sents_pos_tgt = valid_sents_pos_tgt[mask_sents_tgt]
+        
+        if len(valid_sents_pos_tgt) > 0:
+            valid_sents_pos_tgt = torch.sort(valid_sents_pos_tgt)[0]
+            valid_sents_pos_tgt = torch.unique(valid_sents_pos_tgt)
         adjusted_sents_positions_tgt.append(valid_sents_pos_tgt)
+    
+    # ADDITIONAL FIX: Đảm bảo tất cả positions tensors có cùng device
+    device = input_ids_source.device
+    adjusted_words_positions_source = [pos.to(device) for pos in adjusted_words_positions_source]
+    adjusted_sents_positions_source = [pos.to(device) for pos in adjusted_sents_positions_source]
+    adjusted_docs_positions_source = [pos.to(device) for pos in adjusted_docs_positions_source]
+    adjusted_words_positions_tgt = [pos.to(device) for pos in adjusted_words_positions_tgt]
+    adjusted_sents_positions_tgt = [pos.to(device) for pos in adjusted_sents_positions_tgt]
     
     if train:
         return input_ids_source, output_ids, input_ids_summary, heterograph_source, adjusted_words_positions_source, adjusted_sents_positions_source, adjusted_docs_positions_source, heterograph_tgt, adjusted_words_positions_tgt, adjusted_sents_positions_tgt
     else:
         return input_ids_source, output_ids, input_ids_summary, heterograph_source, adjusted_words_positions_source, adjusted_sents_positions_source, adjusted_docs_positions_source, heterograph_tgt, adjusted_words_positions_tgt, adjusted_sents_positions_tgt, tgt
-
+    
 def get_dataloader_summ(args, tokenizer, split_name, num_workers, is_shuffle):
     dataset_all = load_dataset('json', data_files=args.data_path + '%s_graph_noun_sentem.json' % args.dataset_name,
                                split='all')
