@@ -164,7 +164,7 @@ def collate_fn(batch):
         input_ids_summary, batch_first=True, padding_value=pad_token_id
     )
     
-    # FIX: Điều chỉnh positions để phù hợp với padded sequences
+    # FIX: Điều chỉnh positions để đảm bảo không vượt quá bounds
     adjusted_words_positions_source = []
     adjusted_sents_positions_source = []
     adjusted_words_positions_tgt = []
@@ -172,36 +172,41 @@ def collate_fn(batch):
     
     for i in range(len(batch)):
         # Adjust source positions
+        # Index hợp lệ từ 0 đến original_length - 1
         max_valid_pos_source = original_lengths_source[i] - 1
         
-        # Filter và clamp words_positions_source
+        # Filter words_positions_source: chỉ giữ những index < original_length
         valid_words_pos_source = words_positions_source[i]
-        valid_words_pos_source = valid_words_pos_source[valid_words_pos_source <= max_valid_pos_source]
+        # Sử dụng < thay vì <= để đảm bảo không vượt quá bounds
+        mask_words_source = valid_words_pos_source < original_lengths_source[i]
+        valid_words_pos_source = valid_words_pos_source[mask_words_source]
         adjusted_words_positions_source.append(valid_words_pos_source)
         
-        # Filter và clamp sents_positions_source
+        # Filter sents_positions_source tương tự
         valid_sents_pos_source = sents_positions_source[i]
-        valid_sents_pos_source = valid_sents_pos_source[valid_sents_pos_source <= max_valid_pos_source]
+        mask_sents_source = valid_sents_pos_source < original_lengths_source[i]
+        valid_sents_pos_source = valid_sents_pos_source[mask_sents_source]
         adjusted_sents_positions_source.append(valid_sents_pos_source)
         
-        # Adjust target positions  
+        # Adjust target positions tương tự
         max_valid_pos_tgt = original_lengths_summary[i] - 1
         
-        # Filter và clamp words_positions_tgt
+        # Filter words_positions_tgt
         valid_words_pos_tgt = words_positions_tgt[i]
-        valid_words_pos_tgt = valid_words_pos_tgt[valid_words_pos_tgt <= max_valid_pos_tgt]
+        mask_words_tgt = valid_words_pos_tgt < original_lengths_summary[i]
+        valid_words_pos_tgt = valid_words_pos_tgt[mask_words_tgt]
         adjusted_words_positions_tgt.append(valid_words_pos_tgt)
         
-        # Filter và clamp sents_positions_tgt
+        # Filter sents_positions_tgt
         valid_sents_pos_tgt = sents_positions_tgt[i]
-        valid_sents_pos_tgt = valid_sents_pos_tgt[valid_sents_pos_tgt <= max_valid_pos_tgt]
+        mask_sents_tgt = valid_sents_pos_tgt < original_lengths_summary[i]
+        valid_sents_pos_tgt = valid_sents_pos_tgt[mask_sents_tgt]
         adjusted_sents_positions_tgt.append(valid_sents_pos_tgt)
     
     if train:
         return input_ids_source, output_ids, input_ids_summary, heterograph_source, adjusted_words_positions_source, adjusted_sents_positions_source, docs_positions_source, heterograph_tgt, adjusted_words_positions_tgt, adjusted_sents_positions_tgt
     else:
         return input_ids_source, output_ids, input_ids_summary, heterograph_source, adjusted_words_positions_source, adjusted_sents_positions_source, docs_positions_source, heterograph_tgt, adjusted_words_positions_tgt, adjusted_sents_positions_tgt, tgt
-
 
 def get_dataloader_summ(args, tokenizer, split_name, num_workers, is_shuffle):
     dataset_all = load_dataset('json', data_files=args.data_path + '%s_graph_noun_sentem.json' % args.dataset_name,
