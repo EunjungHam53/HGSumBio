@@ -788,7 +788,7 @@ def train(args):
         dirpath=args.ckpt_path,
         filename="{step}-{vloss:.2f}-{avgf:.4f}",
         save_top_k=args.save_top_k,
-        monitor="avgf",
+        monitor="vloss",
         mode="max",
         save_on_train_epoch_end=False,
     )
