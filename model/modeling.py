@@ -2231,19 +2231,45 @@ class LEDModel(LEDPreTrainedModel):
         encoder_attention_mask_new = []
         # print("last_hidden_state", encoder_outputs.last_hidden_state.size())
         # print("attention_mask", attention_mask.size())
+        # for index, last_hidden_state_sample in enumerate(encoder_outputs.last_hidden_state):
+        #     last_hidden_state_sample = last_hidden_state_sample.clone()
+        #     heterograph_sample = heterograph[index % len(heterograph)].to(device)
+        #     words_positions_source_sample = words_positions_source[index % len(words_positions_source)].to(device)
+        #     heterograph_sample["token"].x = torch.index_select(last_hidden_state_sample, 0,
+        #                                                        words_positions_source_sample)
+        #     sents_positions_source_sample = sents_positions_source[index % len(sents_positions_source)].to(device)
+        #     heterograph_sample["sent"].x = torch.index_select(last_hidden_state_sample, 0,
+        #                                                       sents_positions_source_sample)
+        #     if docs_positions_source != None:
+        #         docs_positions_source_sample = docs_positions_source[index % len(docs_positions_source)].to(device)
+        #         heterograph_sample["doc"].x = torch.index_select(last_hidden_state_sample, 0,
+        #                                                          docs_positions_source_sample)
+
         for index, last_hidden_state_sample in enumerate(encoder_outputs.last_hidden_state):
             last_hidden_state_sample = last_hidden_state_sample.clone()
             heterograph_sample = heterograph[index % len(heterograph)].to(device)
             words_positions_source_sample = words_positions_source[index % len(words_positions_source)].to(device)
+
+            # Fix cho token nodes - sử dụng words_positions_source_sample
+            max_valid_idx = last_hidden_state_sample.size(0) - 1
+            
+            # Clamp words_positions_source_sample để tránh out of bounds
+            words_positions_source_sample = torch.clamp(words_positions_source_sample, 0, max_valid_idx)
             heterograph_sample["token"].x = torch.index_select(last_hidden_state_sample, 0,
-                                                               words_positions_source_sample)
+                                                            words_positions_source_sample)
+
+            # Fix cho sent nodes
             sents_positions_source_sample = sents_positions_source[index % len(sents_positions_source)].to(device)
+            sents_positions_source_sample = torch.clamp(sents_positions_source_sample, 0, max_valid_idx)
             heterograph_sample["sent"].x = torch.index_select(last_hidden_state_sample, 0,
-                                                              sents_positions_source_sample)
+                                                            sents_positions_source_sample)
+            
+            # Fix cho doc nodes (nếu có)
             if docs_positions_source != None:
                 docs_positions_source_sample = docs_positions_source[index % len(docs_positions_source)].to(device)
+                docs_positions_source_sample = torch.clamp(docs_positions_source_sample, 0, max_valid_idx)
                 heterograph_sample["doc"].x = torch.index_select(last_hidden_state_sample, 0,
-                                                                 docs_positions_source_sample)
+                                                                docs_positions_source_sample)
 
             hgat = to_hetero(self.gat, heterograph_sample.metadata(), aggr='sum')
             heterograph_sample = T.ToUndirected()(heterograph_sample)
