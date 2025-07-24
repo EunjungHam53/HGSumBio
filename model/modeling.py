@@ -2645,6 +2645,7 @@ class LEDForConditionalGeneration(LEDPreTrainedModel):
             self._docs_positions_source = None
         
         return result
+        
 
     def prepare_inputs_for_generation(
         self,
