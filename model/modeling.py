@@ -2406,7 +2406,7 @@ class LEDModel(LEDPreTrainedModel):
 @add_start_docstrings(
     "The LED Model with a language modeling head. Can be used for summarization.", LED_START_DOCSTRING
 )
-class LEDForConditionalGeneration(LEDPreTrainedModel):
+class LEDForConditionalGenerationnn(LEDPreTrainedModel):
     base_model_prefix = "led"
     _keys_to_ignore_on_load_missing = [
         r"final_logits_bias",

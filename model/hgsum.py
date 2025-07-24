@@ -17,7 +17,7 @@ from transformers import LEDConfig
 # Can't run bcs the original code from huggingface is not capable with the graph structure and sagpooling 
 # from transformers import LEDTokenizer, LEDForConditionalGeneration
 from .tokenization import LEDTokenizer
-from .modeling import LEDForConditionalGeneration
+from .modeling import LEDForConditionalGenerationnn
 from .dataloading import get_dataloader_summ
 
 import sys
@@ -58,7 +58,7 @@ class HGSummarizer(pl.LightningModule):
         self.args = args
 
         self.tokenizer = LEDTokenizer.from_pretrained(args.pretrained_primer)
-        self.model = LEDForConditionalGeneration.from_pretrained(args.pretrained_primer)
+        self.model = LEDForConditionalGenerationnn.from_pretrained(args.pretrained_primer)
 
         # config = LEDConfig.from_pretrained("allenai/led-base-16384")
         # config.use_graph = True 
