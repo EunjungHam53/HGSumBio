@@ -221,7 +221,7 @@ class HGSummarizer(pl.LightningModule):
         global_attention_mask[input_ids == self.sentsep_token_id] = 1
         attention_mask = torch.ones_like(input_ids).cuda()
         attention_mask[input_ids == self.pad_token_id] = 0
-        generated_ids = self.model.generate(
+        generated_ids = self.generate_with_heterograph(
             input_ids=input_ids,
             attention_mask=attention_mask,
             global_attention_mask=global_attention_mask,
@@ -468,6 +468,301 @@ class HGSummarizer(pl.LightningModule):
         
         # Xóa outputs sau khi test
         self.test_outputs.clear()
+
+    def generate_with_heterograph(self, input_ids, attention_mask=None, global_attention_mask=None,
+                             heterograph=None, words_positions_source=None, 
+                             sents_positions_source=None, docs_positions_source=None,
+                             max_length=142, min_length=56, num_beams=4, 
+                             no_repeat_ngram_size=3, length_penalty=2.0, 
+                             early_stopping=True, do_sample=False):
+        """
+        Custom generate method for LED model with heterograph context
+        """
+        device = input_ids.device
+        batch_size = input_ids.shape[0]
+        
+        # Prepare decoder input ids
+        decoder_start_token_id = getattr(self.model.config, 'decoder_start_token_id', self.model.config.bos_token_id)
+        if decoder_start_token_id is None:
+            decoder_start_token_id = self.model.config.eos_token_id
+        
+        decoder_input_ids = torch.full(
+            (batch_size, 1), 
+            decoder_start_token_id, 
+            dtype=torch.long, 
+            device=device
+        )
+        
+        # Prepare base model inputs cho encoder
+        base_model_inputs = {
+            'input_ids': input_ids,
+            'attention_mask': attention_mask,
+        }
+        
+        if global_attention_mask is not None:
+            base_model_inputs['global_attention_mask'] = global_attention_mask
+        
+        # Thêm heterograph parameters nếu có
+        if heterograph is not None:
+            base_model_inputs['heterograph'] = heterograph
+        if words_positions_source is not None:
+            base_model_inputs['words_positions_source'] = words_positions_source
+        if sents_positions_source is not None:
+            base_model_inputs['sents_positions_source'] = sents_positions_source
+        if docs_positions_source is not None:
+            base_model_inputs['docs_positions_source'] = docs_positions_source
+        
+        # Generation
+        if num_beams > 1:
+            return self._generate_beam_search(
+                base_model_inputs=base_model_inputs,
+                decoder_input_ids=decoder_input_ids,
+                max_length=max_length,
+                min_length=min_length,
+                num_beams=num_beams,
+                no_repeat_ngram_size=no_repeat_ngram_size,
+                length_penalty=length_penalty,
+                early_stopping=early_stopping
+            )
+        else:
+            return self._generate_greedy(
+                base_model_inputs=base_model_inputs,
+                decoder_input_ids=decoder_input_ids,
+                max_length=max_length,
+                min_length=min_length,
+                do_sample=do_sample
+            )
+
+    def _generate_beam_search(self, base_model_inputs, decoder_input_ids, max_length, min_length, 
+                            num_beams, no_repeat_ngram_size, length_penalty, early_stopping):
+        """
+        Beam search generation - gọi model đầy đủ mỗi step
+        """
+        device = decoder_input_ids.device
+        batch_size = decoder_input_ids.shape[0]
+        
+        # Expand inputs for beam search
+        expanded_batch_idxs = torch.arange(batch_size, device=device).view(-1, 1).repeat(1, num_beams).view(-1)
+        
+        # Expand tất cả inputs
+        beam_model_inputs = {}
+        for key, value in base_model_inputs.items():
+            if isinstance(value, torch.Tensor):
+                beam_model_inputs[key] = value.index_select(0, expanded_batch_idxs)
+            else:
+                # Cho các tham số như heterograph (có thể là object)
+                beam_model_inputs[key] = value
+        
+        # Initialize beams
+        beam_size = batch_size * num_beams
+        decoder_input_ids = decoder_input_ids.repeat(num_beams, 1)
+        
+        # Beam scores
+        beam_scores = torch.zeros(batch_size, num_beams, device=device)
+        beam_scores[:, 1:] = -1e9
+        beam_scores = beam_scores.view(-1)
+        
+        # Keep track of finished sequences
+        done = torch.zeros(batch_size, dtype=torch.bool, device=device)
+        
+        # Generation loop
+        cur_len = decoder_input_ids.shape[1]
+        while cur_len < max_length:
+            # Prepare full model inputs
+            model_inputs = beam_model_inputs.copy()
+            model_inputs['decoder_input_ids'] = decoder_input_ids
+            model_inputs['use_cache'] = False
+            model_inputs['return_dict'] = True
+            
+            # Forward pass
+            with torch.no_grad():
+                outputs = self.model(**model_inputs)
+            
+            next_token_logits = outputs.logits[:, -1, :]
+            
+            # Apply length penalty
+            if length_penalty != 1.0:
+                next_token_logits = next_token_logits / (cur_len ** length_penalty)
+            
+            # Apply no repeat ngram
+            if no_repeat_ngram_size is not None and no_repeat_ngram_size > 0:
+                next_token_logits = self._apply_no_repeat_ngram(
+                    decoder_input_ids, next_token_logits, no_repeat_ngram_size
+                )
+            
+            # Get top k candidates
+            vocab_size = next_token_logits.shape[-1]
+            next_token_scores = torch.log_softmax(next_token_logits, dim=-1)
+            next_token_scores = next_token_scores + beam_scores[:, None]
+            
+            # Reshape for beam search
+            next_token_scores = next_token_scores.view(batch_size, num_beams * vocab_size)
+            
+            # Get top 2*num_beams candidates
+            next_token_scores, next_tokens = torch.topk(
+                next_token_scores, 2 * num_beams, dim=1, largest=True, sorted=True
+            )
+            
+            # Process each batch
+            next_indices = torch.div(next_tokens, vocab_size, rounding_mode='floor')
+            next_tokens = next_tokens % vocab_size
+            
+            # Update beams
+            beam_outputs = []
+            beam_scores_new = []
+            
+            for batch_idx in range(batch_size):
+                if done[batch_idx]:
+                    # Keep existing beams for finished sequences
+                    beam_outputs.extend([
+                        decoder_input_ids[batch_idx * num_beams + i] 
+                        for i in range(num_beams)
+                    ])
+                    beam_scores_new.extend([
+                        beam_scores[batch_idx * num_beams + i] 
+                        for i in range(num_beams)
+                    ])
+                    continue
+                
+                batch_beam_outputs = []
+                batch_beam_scores = []
+                
+                for beam_token_rank, (next_token, next_score, next_index) in enumerate(
+                    zip(next_tokens[batch_idx], next_token_scores[batch_idx], next_indices[batch_idx])
+                ):
+                    beam_id = batch_idx * num_beams + next_index
+                    
+                    # Check if we have enough beams
+                    if len(batch_beam_outputs) >= num_beams:
+                        break
+                    
+                    # Add token to beam
+                    new_beam = torch.cat([decoder_input_ids[beam_id], next_token.unsqueeze(0)])
+                    batch_beam_outputs.append(new_beam)
+                    batch_beam_scores.append(next_score)
+                
+                beam_outputs.extend(batch_beam_outputs)
+                beam_scores_new.extend(batch_beam_scores)
+            
+            # Update decoder_input_ids and beam_scores
+            max_len = max(len(beam) for beam in beam_outputs)
+            decoder_input_ids = torch.full(
+                (len(beam_outputs), max_len), 
+                self.model.config.pad_token_id, 
+                dtype=torch.long, 
+                device=device
+            )
+            
+            for i, beam in enumerate(beam_outputs):
+                decoder_input_ids[i, :len(beam)] = beam
+            
+            beam_scores = torch.tensor(beam_scores_new, device=device)
+            cur_len = decoder_input_ids.shape[1]
+            
+            # Check for early stopping
+            if early_stopping and cur_len >= min_length:
+                # Check if any beam ends with EOS
+                eos_token_id = self.model.config.eos_token_id
+                if eos_token_id is not None:
+                    for batch_idx in range(batch_size):
+                        if not done[batch_idx]:
+                            batch_beams = decoder_input_ids[batch_idx * num_beams:(batch_idx + 1) * num_beams]
+                            if any(beam[-1] == eos_token_id for beam in batch_beams):
+                                done[batch_idx] = True
+                    
+                    if done.all():
+                        break
+        
+        # Return best beams for each batch
+        final_outputs = []
+        for batch_idx in range(batch_size):
+            batch_beams = decoder_input_ids[batch_idx * num_beams:(batch_idx + 1) * num_beams]
+            batch_scores = beam_scores[batch_idx * num_beams:(batch_idx + 1) * num_beams]
+            best_beam_idx = torch.argmax(batch_scores)
+            final_outputs.append(batch_beams[best_beam_idx])
+        
+        # Stack and pad to same length
+        max_len = max(len(output) for output in final_outputs)
+        result = torch.full(
+            (batch_size, max_len), 
+            self.model.config.pad_token_id, 
+            dtype=torch.long, 
+            device=device
+        )
+        
+        for i, output in enumerate(final_outputs):
+            result[i, :len(output)] = output
+        
+        return result
+
+    def _generate_greedy(self, base_model_inputs, decoder_input_ids, max_length, min_length, do_sample):
+        """
+        Greedy generation - gọi model đầy đủ mỗi step
+        """
+        device = decoder_input_ids.device
+        batch_size = decoder_input_ids.shape[0]
+        
+        cur_len = decoder_input_ids.shape[1]
+        unfinished_sequences = torch.ones(batch_size, dtype=torch.long, device=device)
+        
+        while cur_len < max_length:
+            # Prepare full model inputs
+            model_inputs = base_model_inputs.copy()
+            model_inputs['decoder_input_ids'] = decoder_input_ids
+            model_inputs['use_cache'] = False
+            model_inputs['return_dict'] = True
+            
+            # Forward pass
+            with torch.no_grad():
+                outputs = self.model(**model_inputs)
+            
+            next_token_logits = outputs.logits[:, -1, :]
+            
+            if do_sample:
+                # Sampling
+                probs = torch.softmax(next_token_logits, dim=-1)
+                next_tokens = torch.multinomial(probs, num_samples=1).squeeze(1)
+            else:
+                # Greedy
+                next_tokens = torch.argmax(next_token_logits, dim=-1)
+            
+            # Update sequences
+            next_tokens = next_tokens * unfinished_sequences + self.model.config.pad_token_id * (1 - unfinished_sequences)
+            decoder_input_ids = torch.cat([decoder_input_ids, next_tokens[:, None]], dim=1)
+            
+            # Check for EOS
+            if self.model.config.eos_token_id is not None:
+                unfinished_sequences = unfinished_sequences.mul(
+                    next_tokens.ne(self.model.config.eos_token_id).long()
+                )
+            
+            cur_len += 1
+            
+            # Early stopping
+            if unfinished_sequences.max() == 0:
+                break
+        
+        return decoder_input_ids
+
+    def _apply_no_repeat_ngram(self, input_ids, logits, no_repeat_ngram_size):
+        """
+        Apply no repeat ngram constraint
+        """
+        batch_size, cur_len = input_ids.shape
+        
+        if cur_len + 1 < no_repeat_ngram_size:
+            return logits
+        
+        for batch_idx in range(batch_size):
+            banned_tokens = set()
+            for i in range(cur_len - no_repeat_ngram_size + 2):
+                ngram = tuple(input_ids[batch_idx, i:i + no_repeat_ngram_size - 1].tolist())
+                banned_tokens.add(input_ids[batch_idx, i + no_repeat_ngram_size - 1].item())
+            
+            for token in banned_tokens:
+                logits[batch_idx, token] = -float('inf')
+        
+        return logits
 
 
 def train(args):
