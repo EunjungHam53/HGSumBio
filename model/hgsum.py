@@ -225,7 +225,7 @@ class HGSummarizer(pl.LightningModule):
             input_ids=input_ids,
             attention_mask=attention_mask,
             global_attention_mask=global_attention_mask,
-            use_cache=False,
+            # use_cache=False,
             max_length=self.args.max_length_tgt,
             min_length=self.args.min_length_tgt,
             num_beams=self.args.beam_size,
