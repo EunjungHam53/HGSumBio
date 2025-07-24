@@ -383,9 +383,16 @@ class HGSummarizer(pl.LightningModule):
             logs = dict(zip(*[names, metrics]))
             self.logger.log_metrics(logs, step=self.global_step)
             self.log("avgf", avgf)
+            return {
+                "avg_val_loss": vloss,
+                "avgf": avgf,
+                "log": logs,
+                "progress_bar": logs,
+            }
         else:
             logs = {"vloss": vloss}
             self.logger.log_metrics(logs, step=self.global_step)
+            return {"vloss": vloss, "log": logs, "progress_bar": logs}
         
         # Xóa outputs sau mỗi epoch
         self.validation_outputs.clear()
@@ -468,6 +475,7 @@ class HGSummarizer(pl.LightningModule):
         
         # Xóa outputs sau khi test
         self.test_outputs.clear()
+        return {"avg_test_loss": tloss, "avgf": avgf, "log": logs, "progress_bar": logs}
 
     def generate_with_heterograph(self, input_ids, attention_mask=None, global_attention_mask=None,
                              heterograph=None, words_positions_source=None, 
