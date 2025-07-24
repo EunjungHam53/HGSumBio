@@ -2560,26 +2560,117 @@ class LEDForConditionalGeneration(LEDPreTrainedModel):
             sagpooling_outputs=outputs.sagpooling_outputs
         )
 
-    def prepare_inputs_for_generation(
-            self,
-            decoder_input_ids,
-            past=None,
-            attention_mask=None,
-            global_attention_mask=None,
-            head_mask=None,
-            decoder_head_mask=None,
-            cross_attn_head_mask=None,
-            use_cache=None,
-            encoder_outputs=None,
-            heterograph=None,
-            words_positions_source=None,
-            sents_positions_source=None,
-            docs_positions_source=None,
-            **kwargs,
+    # def prepare_inputs_for_generation(
+    #         self,
+    #         decoder_input_ids,
+    #         past=None,
+    #         attention_mask=None,
+    #         global_attention_mask=None,
+    #         head_mask=None,
+    #         decoder_head_mask=None,
+    #         cross_attn_head_mask=None,
+    #         use_cache=None,
+    #         encoder_outputs=None,
+    #         heterograph=None,
+    #         words_positions_source=None,
+    #         sents_positions_source=None,
+    #         docs_positions_source=None,
+    #         **kwargs,
+    # ):
+    #     # cut decoder_input_ids if past is used
+    #     if past is not None:
+    #         decoder_input_ids = decoder_input_ids[:, -1:]
+
+    #     return {
+    #         "input_ids": None,  # encoder_outputs is defined. input_ids not needed
+    #         "encoder_outputs": encoder_outputs,
+    #         "past_key_values": past,
+    #         "decoder_input_ids": decoder_input_ids,
+    #         "attention_mask": attention_mask,
+    #         "global_attention_mask": global_attention_mask,
+    #         "head_mask": head_mask,
+    #         "decoder_head_mask": decoder_head_mask,
+    #         "cross_attn_head_mask": cross_attn_head_mask,
+    #         "use_cache": use_cache,  # change this to avoid caching (presumably for debugging)
+    #         "heterograph": heterograph,
+    #         "words_positions_source": words_positions_source,
+    #         "sents_positions_source": sents_positions_source,
+    #         "docs_positions_source": docs_positions_source
+    #     }
+
+    def generate(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        global_attention_mask: Optional[torch.FloatTensor] = None,
+        heterograph: Optional[List[HeteroData]] = None,
+        words_positions_source: Optional[List[torch.LongTensor]] = None,
+        sents_positions_source: Optional[List[torch.LongTensor]] = None,
+        docs_positions_source: Optional[List[torch.LongTensor]] = None,
+        **kwargs
     ):
+        """
+        Custom generate method for LEDForConditionalGeneration with heterograph support.
+        
+        Args:
+            input_ids: Input token ids
+            attention_mask: Attention mask for input
+            global_attention_mask: Global attention mask for LED
+            heterograph: List of heterogeneous graphs
+            words_positions_source: List of word positions in source
+            sents_positions_source: List of sentence positions in source  
+            docs_positions_source: List of document positions in source
+            **kwargs: Additional generation arguments (max_length, num_beams, etc.)
+        """
+        
+        # Store the custom parameters to pass them to prepare_inputs_for_generation
+        self._heterograph = heterograph
+        self._words_positions_source = words_positions_source
+        self._sents_positions_source = sents_positions_source
+        self._docs_positions_source = docs_positions_source
+        
+        # Call the parent generate method
+        try:
+            result = super().generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                global_attention_mask=global_attention_mask,
+                **kwargs
+            )
+        finally:
+            # Clean up stored parameters
+            self._heterograph = None
+            self._words_positions_source = None
+            self._sents_positions_source = None
+            self._docs_positions_source = None
+        
+        return result
+
+    def prepare_inputs_for_generation(
+        self,
+        decoder_input_ids,
+        past=None,
+        attention_mask=None,
+        global_attention_mask=None,
+        head_mask=None,
+        decoder_head_mask=None,
+        cross_attn_head_mask=None,
+        use_cache=None,
+        encoder_outputs=None,
+        **kwargs,
+    ):
+        """
+        Updated prepare_inputs_for_generation to include heterograph parameters.
+        """
         # cut decoder_input_ids if past is used
         if past is not None:
             decoder_input_ids = decoder_input_ids[:, -1:]
+        
+        # Get the stored heterograph parameters
+        heterograph = getattr(self, '_heterograph', None)
+        words_positions_source = getattr(self, '_words_positions_source', None)
+        sents_positions_source = getattr(self, '_sents_positions_source', None)
+        docs_positions_source = getattr(self, '_docs_positions_source', None)
 
         return {
             "input_ids": None,  # encoder_outputs is defined. input_ids not needed
@@ -2591,7 +2682,7 @@ class LEDForConditionalGeneration(LEDPreTrainedModel):
             "head_mask": head_mask,
             "decoder_head_mask": decoder_head_mask,
             "cross_attn_head_mask": cross_attn_head_mask,
-            "use_cache": use_cache,  # change this to avoid caching (presumably for debugging)
+            "use_cache": use_cache,
             "heterograph": heterograph,
             "words_positions_source": words_positions_source,
             "sents_positions_source": sents_positions_source,
