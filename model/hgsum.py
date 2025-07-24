@@ -58,11 +58,11 @@ class HGSummarizer(pl.LightningModule):
         self.args = args
 
         self.tokenizer = LEDTokenizer.from_pretrained(args.pretrained_primer)
-        # self.model = LEDForConditionalGeneration.from_pretrained(args.pretrained_primer)
+        self.model = LEDForConditionalGeneration.from_pretrained(args.pretrained_primer)
 
-        config = LEDConfig.from_pretrained("allenai/led-base-16384")
-        config.use_graph = True 
-        self.model = LEDForConditionalGeneration(config)
+        # config = LEDConfig.from_pretrained("allenai/led-base-16384")
+        # config.use_graph = True 
+        # self.model = LEDForConditionalGeneration(config)
 
         self.pad_token_id = self.tokenizer.pad_token_id
         self.use_ddp = self.args.speed_strategy == "ddp"
