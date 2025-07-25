@@ -2511,6 +2511,17 @@ class LEDForConditionalGeneration(LEDPreTrainedModel):
                 decoder_input_ids = shift_tokens_right(
                     labels, self.config.pad_token_id, self.config.decoder_start_token_id
                 )
+
+        # During generation, use stored parameters if not provided
+        if heterograph is None and hasattr(self, '_heterograph'):
+            heterograph = self._heterograph
+        if words_positions_source is None and hasattr(self, '_words_positions_source'):
+            words_positions_source = self._words_positions_source
+        if sents_positions_source is None and hasattr(self, '_sents_positions_source'):
+            sents_positions_source = self._sents_positions_source  
+        if docs_positions_source is None and hasattr(self, '_docs_positions_source'):
+            docs_positions_source = self._docs_positions_source
+
         outputs = self.led(
             input_ids,
             attention_mask=attention_mask,
