@@ -788,8 +788,8 @@ def train(args):
         dirpath=args.ckpt_path,
         filename="{step}-{vloss:.2f}-{avgf:.4f}",
         save_top_k=args.save_top_k,
-        monitor="vloss",
-        mode="max",
+        monitor=args.monitor if hasattr(args, "monitor") else "vloss",
+        mode=args.monitor_mode if hasattr(args, "monitor_mode") else "min",
         save_on_train_epoch_end=False,
     )
     early_stopping = EarlyStopping(monitor='vloss', patience=3, mode='min')
@@ -919,6 +919,10 @@ if __name__ == "__main__":
     parser.add_argument("--apply_triblck", action="store_true",
                         help="whether apply trigram block in the evaluation phase")
     parser.add_argument("--num_test_data", type=int, default=-1, help="the number of testing data")
+
+    parser.add_argument("--monitor", type=str, default="vloss", help="metric to monitor for saving checkpoints")
+    parser.add_argument("--monitor_mode", type=str, default="min", choices=["min", "max"],
+                        help="mode of the metric to monitor for saving checkpoints")
 
     args = parser.parse_args()
     args.accum_batch = args.accum_data_per_step // args.batch_size
